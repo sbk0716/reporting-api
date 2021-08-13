@@ -62,7 +62,7 @@ jobs:
           IMAGE_TAG=develop-$SHORT_COMMIT_HASH
           REPORTING_BUCKET=stg-gw-reporting-file
         else
-          IMAGE_TAG=other-$SHORT_COMMIT_HASH
+          IMAGE_TAG=feature-$SHORT_COMMIT_HASH
           REPORTING_BUCKET=stg-gw-reporting-file
         fi
         aws ecr list-images --repository-name $ECR_REPOSITORY | jq ".imageIds[].imageTag" > image-list.txt
