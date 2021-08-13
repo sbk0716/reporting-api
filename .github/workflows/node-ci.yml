@@ -1,0 +1,88 @@
+name: 'Node.js CI'
+on:
+  push:
+    branches:
+      - 'feature/**'
+      - 'bugfix/**'
+      - 'hotfix/**'
+      - 'dependabot/**'
+
+env:
+  AWS_REGION: 'ap-northeast-1'
+  # SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+
+jobs:
+  lintJob:
+    name: 'lint check'
+    runs-on: ubuntu-latest
+    # runs-on: [self-hosted, linux, x64]
+    strategy:
+      matrix:
+        node-version: [16.x]
+    steps:
+      - name: 'Checkout'
+        uses: actions/checkout@v2
+      - name: 'Use Node.js ${{ matrix.node-version }}'
+        uses: actions/setup-node@v2
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - run: yarn add -D eslint prettier
+      - run: yarn run lint
+      - run: yarn run format
+
+      # - name: 'Slack Notification on Failure'
+      #   uses: rtCamp/action-slack-notify@v2.0.0
+      #   if: failure()
+      #   env:
+      #     SLACK_COLOR: ${{ job.status }}
+      #     SLACK_TITLE: 'Node CI lint job has failed :boom:'
+
+  testJob:
+    name: 'test'
+    runs-on: ubuntu-latest
+    # runs-on: [self-hosted, linux, x64]
+    strategy:
+      matrix:
+        node-version: [16.x]
+    steps:
+      # Check out repository code
+      - name: 'Check out repository code'
+        uses: actions/checkout@v2
+      # Setup Node.js
+      - name: 'Setup Node.js ${{ matrix.node-version }}'
+        uses: actions/setup-node@v2
+        with:
+          node-version: ${{ matrix.node-version }}
+      # Configure AWS credentials
+      - name: 'Configure AWS credentials'
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      # Execute test
+      - name: 'Execute test'
+        env:
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          if [ $(echo $GITHUB_REF | grep 'main') ]; then
+            REPORTING_BUCKET=prd-gw-reporting-file
+          elif [ $(echo $GITHUB_REF | grep 'develop') ]; then
+            REPORTING_BUCKET=stg-gw-reporting-file
+          else
+            REPORTING_BUCKET=stg-gw-reporting-file
+          fi
+          mkdir -p .tmp/template/
+          aws s3 cp s3://${REPORTING_BUCKET}/report-template/ .tmp/template/ --exclude "*" --include "*.mrt" --recursive
+          ls -la && ls -la .tmp/template/
+          yarn install --production=false
+          yarn run init:prod
+          yarn run test:prod
+      # Slack Notification on Failure
+      # - name: 'Slack Notification on Failure'
+      #   uses: rtCamp/action-slack-notify@v2.0.0
+      #   if: failure()
+      #   env:
+      #     SLACK_COLOR: ${{ job.status }}
+      #     SLACK_TITLE: 'Node CI test job has failed :boom:'

@@ -1,0 +1,16 @@
+.DS_Store
+.dockerignore
+.eslintrc.js
+.git/
+.github/
+.gitignore
+.prettierrc
+README.md
+coverage/
+dist/
+docker-compose.transpile.yml
+docker-compose.yml
+env.sample
+node_modules/
+package-lock.json
+test/
