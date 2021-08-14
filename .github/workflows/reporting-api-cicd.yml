@@ -1,0 +1,171 @@
+name: '[reporting-api]ECR Push & ECS Deploy Job'
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+      - develop
+
+env:
+  AWS_REGION: 'ap-northeast-1'
+  ECR_REPOSITORY: 'reporting-api'
+  # SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+  NODE_OPTIONS: '--max_old_space_size=4096'
+
+jobs:
+  pushAndDeploy:
+    name: '[reporting-api]ECR Push & ECS Deploy Job'
+    # Execute pushAndDeploy Job if GITHUB_EVENT_PR_HEAD_REF does not contain dependabot
+    if: ${{ github.event.pull_request.merged == true && contains(github.event.pull_request.head.ref, 'dependabot') != true}}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [16.x]
+    steps:
+      - name: Dump GITHUB_REF
+        env:
+          GITHUB_REF: ${{ github.ref }}
+        run: echo "$GITHUB_REF"
+      - name: Dump GITHUB_EVENT_PR_BASE_REF
+        env:
+          GITHUB_EVENT_PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: echo "$GITHUB_EVENT_PR_BASE_REF"
+      - name: Dump GITHUB_EVENT_PR_HEAD_REF
+        env:
+          GITHUB_EVENT_PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: echo "$GITHUB_EVENT_PR_HEAD_REF"
+      # Check out repository code
+      - name: 'Check out repository code'
+        uses: actions/checkout@v2
+      # Setup Node.js
+      - name: 'Setup Node.js ${{ matrix.node-version }}'
+        uses: actions/setup-node@v2
+        with:
+          node-version: ${{ matrix.node-version }}
+      # Configure AWS credentials
+      - name: 'Configure AWS credentials'
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      # Login to Amazon ECR
+      - name: 'Login to Amazon ECR'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+      # Login to Docker Hub
+      - name: Login to Docker Hub
+        id: login-docker-hub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+      # Build, tag, and push image to Amazon ECR
+      - name: 'Build, tag, and push image to Amazon ECR'
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          COMMIT_HASH: ${{ github.sha }}
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          export NODE_OPTIONS=$NODE_OPTIONS
+          SHORT_COMMIT_HASH=$(echo $COMMIT_HASH | cut -c 1-7)
+          if [ $(echo $GITHUB_REF | grep 'main') ]; then
+            IMAGE_TAG=main-$SHORT_COMMIT_HASH
+            REPORTING_BUCKET=prd-gw-reporting-file
+          elif [ $(echo $GITHUB_REF | grep 'develop') ]; then
+            IMAGE_TAG=develop-$SHORT_COMMIT_HASH
+            REPORTING_BUCKET=stg-gw-reporting-file
+          else
+            IMAGE_TAG=feature-$SHORT_COMMIT_HASH
+            REPORTING_BUCKET=stg-gw-reporting-file
+          fi
+          mkdir -p .tmp/template/
+          aws s3 cp s3://${REPORTING_BUCKET}/report-template/ .tmp/template/ --exclude "*" --include "*.mrt" --recursive
+          ls -la && ls -la .tmp/template/
+          docker build -f docker/api/transpile/Dockerfile -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+      # [Staging]create task definition
+      - name: '[Staging]create task definition'
+        id: stg-create-task
+        if: ${{ contains(github.ref, 'develop') == true }}
+        env:
+          TASK_DEFINITION_NAME: 'stg-reporting-api-task'
+        run: |
+          aws ecs describe-task-definition --task-definition $TASK_DEFINITION_NAME | jq ".taskDefinition" > tmp-$TASK_DEFINITION_NAME.json
+          cat tmp-$TASK_DEFINITION_NAME.json | jq "del(.compatibilities)" | jq "del(.taskDefinitionArn)" | jq "del(.requiresAttributes)" | jq "del(.revision)" | jq "del(.status)" | jq "del(.registeredAt)" | jq "del(.registeredBy)" > $TASK_DEFINITION_NAME.json
+          echo "::set-output name=task-path::$TASK_DEFINITION_NAME.json"
+      # [Staging]Fill in the new image ID in the Amazon ECS task definition
+      - name: '[Staging]Fill in the new image ID in the Amazon ECS task definition'
+        if: ${{ contains(github.ref, 'develop') == true }}
+        id: stg-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ${{ steps.stg-create-task.outputs.task-path }}
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build-image.outputs.image }}
+        env:
+          CONTAINER_NAME: 'stg-reporting-api-container'
+      # [Staging]Deploy Amazon ECS task definition
+      - name: '[Staging]Deploy Amazon ECS task definition'
+        if: ${{ contains(github.ref, 'develop') == true }}
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.stg-task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: false
+        env:
+          ECS_SERVICE: 'stg-reporting-api-ecs-svc'
+          ECS_CLUSTER: 'stg-reporting-api-cluster'
+      # [Production]create task definition
+      - name: '[Production]create task definition'
+        id: prd-create-task
+        if: ${{ contains(github.ref, 'main') == true }}
+        env:
+          TASK_DEFINITION_NAME: 'prd-reporting-api-task'
+        run: |
+          aws ecs describe-task-definition --task-definition $TASK_DEFINITION_NAME | jq ".taskDefinition" > tmp-$TASK_DEFINITION_NAME.json
+          cat tmp-$TASK_DEFINITION_NAME.json | jq "del(.compatibilities)" | jq "del(.taskDefinitionArn)" | jq "del(.requiresAttributes)" | jq "del(.revision)" | jq "del(.status)" | jq "del(.registeredAt)" | jq "del(.registeredBy)" > $TASK_DEFINITION_NAME.json
+          echo "::set-output name=task-path::$TASK_DEFINITION_NAME.json"
+      # [Production]Fill in the new image ID in the Amazon ECS task definition
+      - name: '[Production]Fill in the new image ID in the Amazon ECS task definition'
+        if: ${{ contains(github.ref, 'main') == true }}
+        id: prd-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ${{ steps.prd-create-task.outputs.task-path }}
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build-image.outputs.image }}
+        env:
+          CONTAINER_NAME: 'prd-reporting-api-container'
+      # [Production]Deploy Amazon ECS task definition
+      - name: '[Production]Deploy Amazon ECS task definition'
+        if: ${{ contains(github.ref, 'main') == true }}
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.prd-task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+        env:
+          ECS_SERVICE: 'prd-reporting-api-ecs-svc'
+          ECS_CLUSTER: 'prd-reporting-api-cluster'
+      # Slack Notification on Success
+      # - name: 'Slack Notification on Success'
+      #   if: success()
+      #   uses: rtCamp/action-slack-notify@v2.0.0
+      #   env:
+      #     SLACK_COLOR: ${{ job.status }}
+      #     SLACK_TITLE: 'Slack Notification on Success'
+      #     SLACK_MESSAGE: 'Succeeded in updating ECS service for reporting-api :rocket:'
+      # Slack Notification on Failure
+      # - name: 'Slack Notification on Failure'
+      #   uses: rtCamp/action-slack-notify@v2.0.0
+      #   if: failure()
+      #   env:
+      #     SLACK_COLOR: ${{ job.status }}
+      #     SLACK_TITLE: 'Slack Notification on Failure'
+      #     SLACK_MESSAGE: 'Failed to update ECS service for reporting-api :boom:'
