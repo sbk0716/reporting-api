@@ -1,0 +1,126 @@
+name: '[DEPLOYMENT]ECR Push & ECS Deploy Job'
+
+on: 
+  # https://docs.github.com/ja/actions/reference/events-that-trigger-workflows#example-workflow-configuration
+  deployment
+
+env:
+  AWS_REGION: 'ap-northeast-1'
+  # SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+  NODE_OPTIONS: '--max_old_space_size=4096'
+
+jobs:
+  # job for reporting-api
+  consoleApiDeployment:
+    name: '[reporting-api]Deployment Job'
+    if: ${{ github.event.deployment.task == 'reporting-api' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [16.x]
+    steps:
+    - name: '[reporting-api]Check out repository code'
+      uses: actions/checkout@v2
+
+    - name: '[reporting-api]Setup Node.js ${{ matrix.node-version }}'
+      uses: actions/setup-node@v2
+      with:
+        node-version: ${{ matrix.node-version }}
+
+    - name: '[reporting-api]Configure AWS credentials'
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: '[reporting-api]Login to ECR'
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: '[reporting-api]Login to Docker Hub'
+      id: login-docker-hub
+      uses: docker/login-action@v1
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+    - name: '[reporting-api]Build, tag, and push image to ECR'
+      id: build-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        COMMIT_HASH: ${{ github.sha }}
+        GITHUB_REF: ${{ github.ref }}
+        ECR_REPOSITORY: ${{ github.event.deployment.task }}
+      run: |
+        export NODE_OPTIONS=$NODE_OPTIONS
+        SHORT_COMMIT_HASH=$(echo $COMMIT_HASH | cut -c 1-7)
+        if [ $(echo $GITHUB_REF | grep 'main') ]; then
+          IMAGE_TAG=main-$SHORT_COMMIT_HASH
+          REPORTING_BUCKET=prd-gw-reporting-file
+        elif [ $(echo $GITHUB_REF | grep 'develop') ]; then
+          IMAGE_TAG=develop-$SHORT_COMMIT_HASH
+          REPORTING_BUCKET=stg-gw-reporting-file
+        else
+          IMAGE_TAG=feature-$SHORT_COMMIT_HASH
+          REPORTING_BUCKET=stg-gw-reporting-file
+        fi
+        aws ecr list-images --repository-name $ECR_REPOSITORY | jq ".imageIds[].imageTag" > image-list.txt
+        if [ $(cat image-list.txt | grep $IMAGE_TAG) ]; then
+          echo "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG already exists."
+          echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+        else
+          echo "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG does not exist."
+          mkdir -p .tmp/template/
+          aws s3 cp s3://${REPORTING_BUCKET}/report-template/ .tmp/template/ --exclude "*" --include "*.mrt" --recursive
+          ls -la && ls -la .tmp/template/
+          docker build -f docker/api/transpile/Dockerfile -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+        fi
+
+    - name: '[reporting-api]create task definition'
+      id: stg-reporting-api-task
+      env:
+        TASK_DEFINITION_NAME: 'stg-reporting-api-task'
+      run: |
+        aws ecs describe-task-definition --task-definition $TASK_DEFINITION_NAME | jq ".taskDefinition" > tmp-$TASK_DEFINITION_NAME.json
+        cat tmp-$TASK_DEFINITION_NAME.json | jq "del(.compatibilities)" | jq "del(.taskDefinitionArn)" | jq "del(.requiresAttributes)" | jq "del(.revision)" | jq "del(.status)" | jq "del(.registeredAt)" | jq "del(.registeredBy)" > $TASK_DEFINITION_NAME.json
+        echo "::set-output name=task-path::$TASK_DEFINITION_NAME.json"
+
+    - name: '[reporting-api]Fill in the new image ID in the ECS task definition'
+      id: stg-reporting-api-task-def
+      uses: aws-actions/amazon-ecs-render-task-definition@v1
+      with:
+        task-definition: ${{ steps.stg-reporting-api-task.outputs.task-path }}
+        container-name: ${{ env.CONTAINER_NAME }}
+        image: ${{ steps.build-image.outputs.image }}
+      env:
+        CONTAINER_NAME: 'stg-reporting-api-container'
+
+    - name: '[reporting-api]Deploy ECS task definition'
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+      with:
+        task-definition: ${{ steps.stg-reporting-api-task-def.outputs.task-definition }}
+        service: ${{ env.ECS_SERVICE }}
+        cluster: ${{ env.ECS_CLUSTER }}
+        wait-for-service-stability: true
+      env:
+        ECS_SERVICE: 'stg-reporting-api-ecs-svc'
+        ECS_CLUSTER: 'stg-reporting-api-cluster'
+
+    # - name: 'Slack Notification on Success'
+    #   if: success()
+    #   uses: rtCamp/action-slack-notify@v2.0.0
+    #   env:
+    #     SLACK_COLOR: ${{ job.status }}
+    #     SLACK_TITLE: 'Slack Notification on Success'
+    #     SLACK_MESSAGE: 'Succeeded in updating ECS service for reporting-api :rocket:'
+
+    # - name: 'Slack Notification on Failure'
+    #   uses: rtCamp/action-slack-notify@v2.0.0
+    #   if: failure()
+    #   env:
+    #     SLACK_COLOR: ${{ job.status }}
+    #     SLACK_TITLE: 'Slack Notification on Failure'
+    #     SLACK_MESSAGE: 'Failed to update ECS service for reporting-api :boom:'

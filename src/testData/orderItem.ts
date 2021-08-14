@@ -48,8 +48,8 @@ export const testOrderItem = {
       officialPosition: '代表取締役社長',
       ceoName: '斎藤 一',
       zipCode: '530-0027',
-      address: '大阪府大阪市北区堂山町2-2-2-2-2-2-2-2-2',
-      building: 'ヒュ-ビル 2F 2F 2F 2F 2F 2F 2F',
+      address: '大阪府大阪市北区堂山町2-2-2-2-2-2',
+      building: 'ヒュ-ビル 2F 2F 2F 2F',
       phoneNumber: '07012341234',
     },
     taxAccount: {
