@@ -2,6 +2,8 @@ name: 'Node.js CI'
 on:
   push:
     branches:
+      - main
+      - develop
       - 'feature/**'
       - 'bugfix/**'
       - 'hotfix/**'
@@ -40,6 +42,8 @@ jobs:
 
   testJob:
     name: 'test'
+    # Execute Job if GITHUB_REF does not contain dependabot
+    if: ${{ contains(github.ref, 'dependabot') != true }}
     runs-on: ubuntu-latest
     # runs-on: [self-hosted, linux, x64]
     strategy:
