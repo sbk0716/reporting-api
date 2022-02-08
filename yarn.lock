@@ -1861,15 +1861,15 @@ avvio@^7.1.2:
     fastq "^1.6.1"
     queue-microtask "^1.1.2"
 
-aws-sdk@^2.962.0:
-  version "2.962.0"
-  resolved "https://registry.yarnpkg.com/aws-sdk/-/aws-sdk-2.962.0.tgz#cb9c5a4e52b7bb31c2906f91e280b39c6a1538b2"
-  integrity sha512-uY87X0bQ0tFjxt/AxJM9gZDxNzz8hD7uJG4azw7fgZibBqG2eYMAw2ythkQB/B8kLPenm/jr5+FsIG28qaC63Q==
+aws-sdk@^2.1071.0:
+  version "2.1071.0"
+  resolved "https://registry.yarnpkg.com/aws-sdk/-/aws-sdk-2.1071.0.tgz#f92e5521f86a3d8f1bfd3ea6afaea03aa56757dc"
+  integrity sha512-Fjp5GOzctLHly5ySBGzASZVWEQi3zHc2TlYkiT5VNwvDiV9Uwv2frm2zgQf0wL6BOkPRS2b1TfOJT7x6Q5aOIw==
   dependencies:
     buffer "4.9.2"
     events "1.1.1"
     ieee754 "1.1.13"
-    jmespath "0.15.0"
+    jmespath "0.16.0"
     querystring "0.2.0"
     sax "1.2.1"
     url "0.10.3"
@@ -4432,10 +4432,10 @@ jimp@^0.16.1:
     "@jimp/types" "^0.16.1"
     regenerator-runtime "^0.13.3"
 
-jmespath@0.15.0:
-  version "0.15.0"
-  resolved "https://registry.yarnpkg.com/jmespath/-/jmespath-0.15.0.tgz#a3f222a9aae9f966f5d27c796510e28091764217"
-  integrity sha1-o/Iiqarp+Wb10nx5ZRDigJF2Qhc=
+jmespath@0.16.0:
+  version "0.16.0"
+  resolved "https://registry.yarnpkg.com/jmespath/-/jmespath-0.16.0.tgz#b15b0a85dfd4d930d43e69ed605943c802785076"
+  integrity sha512-9FzQjJ7MATs1tSpnco1K6ayiYE3figslrXA72G2HQ/n76RzvYlofyi5QM+iX4YRs/pu3yzxlVQSST23+dMDknw==
 
 jpeg-js@0.4.2:
   version "0.4.2"
